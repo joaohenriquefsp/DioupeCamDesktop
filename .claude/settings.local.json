@@ -3,7 +3,9 @@
     "allow": [
       "Bash(go version:*)",
       "Bash(where go:*)",
-      "Bash(go mod:*)"
+      "Bash(go mod:*)",
+      "Bash(rm main.go config.go h264_client.go unity_capture.go tray.go)",
+      "Bash(go build:*)"
     ]
   }
 }

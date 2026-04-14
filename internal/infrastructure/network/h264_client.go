@@ -1,4 +1,4 @@
-package main
+package network
 
 import (
 	"fmt"
@@ -8,23 +8,25 @@ import (
 	"os/exec"
 	"sync/atomic"
 	"time"
+
+	"dioupecamdesktop/internal/domain"
 )
 
+// H264Client implementa domain.StreamSource.
+// Conecta via TCP (USB first, depois WiFi), decodifica H.264 via FFmpeg e
+// entrega frames BGRA via callback.
 type H264Client struct {
-	cfg      Config
-	onFrame  func([]byte)
+	cfg      domain.Config
 	ffmpeg   *exec.Cmd
 	conn     net.Conn
 	stopping atomic.Bool
 }
 
-func NewH264Client(cfg Config, onFrame func([]byte)) *H264Client {
-	return &H264Client{cfg: cfg, onFrame: onFrame}
+func NewH264Client(cfg domain.Config) *H264Client {
+	return &H264Client{cfg: cfg}
 }
 
-// Start connects to DioupeCam (USB first, then WiFi) and begins decoding.
-// FFmpeg reads H.264 from stdin and outputs raw BGRA frames to stdout.
-func (c *H264Client) Start() error {
+func (c *H264Client) Start(onFrame func([]byte)) error {
 	conn, mode, err := c.connect()
 	if err != nil {
 		return fmt.Errorf("sem conexão com DioupeCam (tentou USB e WiFi): %w", err)
@@ -67,7 +69,7 @@ func (c *H264Client) Start() error {
 		stdinPipe.Close()
 	}()
 
-	// FFmpeg stdout → frames BGRA
+	// FFmpeg stdout → frames BGRA → callback
 	go func() {
 		buf := make([]byte, frameSize)
 		for {
@@ -80,7 +82,7 @@ func (c *H264Client) Start() error {
 			if !c.stopping.Load() {
 				frame := make([]byte, frameSize)
 				copy(frame, buf)
-				c.onFrame(frame)
+				onFrame(frame)
 			}
 		}
 	}()

@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package capture
 
 import (
 	"fmt"
@@ -9,9 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// UnityCaptureWriter escreve frames BGRA na shared memory que o Unity Capture
-// DirectShow filter lê. Verificar layout do header em:
-// github.com/schellingb/UnityCapture → UnityCaptureFilter.cpp
+// sharedMemName é o nome da memória compartilhada que o Unity Capture DirectShow filter lê.
+// Verificar layout do header em: github.com/schellingb/UnityCapture → UnityCaptureFilter.cpp
 const sharedMemName = "UnityCapture_0"
 
 type UnityCaptureWriter struct {
@@ -22,7 +21,7 @@ type UnityCaptureWriter struct {
 	frameSize uint32
 }
 
-func NewUnityCaptureWriter(width, height uint32) (*UnityCaptureWriter, error) {
+func New(width, height uint32) (*UnityCaptureWriter, error) {
 	frameSize := width * height * 4 // BGRA — 4 bytes por pixel
 	totalSize := uint32(16) + frameSize
 
@@ -56,18 +55,16 @@ func NewUnityCaptureWriter(width, height uint32) (*UnityCaptureWriter, error) {
 	return w, nil
 }
 
-// writeHeader escreve os metadados do frame no início da shared memory.
+// writeHeader escreve os metadados no início da shared memory.
 // Layout: [width uint32][height uint32][format uint32][flags uint32][pixels...]
 // format 0 = BGRA32
 func (w *UnityCaptureWriter) writeHeader() {
 	*(*uint32)(unsafe.Pointer(w.mapAddr + 0)) = w.width
 	*(*uint32)(unsafe.Pointer(w.mapAddr + 4)) = w.height
-	*(*uint32)(unsafe.Pointer(w.mapAddr + 8)) = 0 // BGRA32
+	*(*uint32)(unsafe.Pointer(w.mapAddr + 8)) = 0  // BGRA32
 	*(*uint32)(unsafe.Pointer(w.mapAddr + 12)) = 0 // flags reservados
 }
 
-// WriteFrame copia os bytes BGRA para a shared memory.
-// Deve ser chamado apenas quando len(bgra) == width*height*4.
 func (w *UnityCaptureWriter) WriteFrame(bgra []byte) {
 	if uint32(len(bgra)) != w.frameSize {
 		return
