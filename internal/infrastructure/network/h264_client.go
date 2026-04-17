@@ -5,7 +5,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"os/exec"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,10 +22,12 @@ type H264Client struct {
 	ffmpeg   *exec.Cmd
 	conn     net.Conn
 	stopping atomic.Bool
+	wg       sync.WaitGroup
+	onDone   func(error) // chamado quando o stream cai por erro (não por Stop)
 }
 
-func NewH264Client(cfg domain.Config) *H264Client {
-	return &H264Client{cfg: cfg}
+func NewH264Client(cfg domain.Config, onDone func(error)) *H264Client {
+	return &H264Client{cfg: cfg, onDone: onDone}
 }
 
 func (c *H264Client) Start(onFrame func([]byte)) error {
@@ -34,15 +38,30 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 	log.Printf("conectado via %s", mode)
 	c.conn = conn
 
-	frameSize := c.cfg.Width * c.cfg.Height * 4 // BGRA
+	frameSize := c.cfg.Width * c.cfg.Height * 4
+
+	// scale com preservação de aspect ratio + padding preto para preencher a resolução alvo.
+	// Evita esticamento horizontal quando câmera e config têm proporções diferentes (ex: 4:3 vs 16:9).
+	// crop=in_w:in_h-1:0:0 remove a última linha antes do scale:
+	// alguns encoders MediaCodec de hardware Android deixam a última linha
+	// com chroma não inicializado (aparece verde após decode YUV→RGBA).
+	scaleFilter := fmt.Sprintf(
+		"crop=in_w:in_h-1:0:0,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1",
+		c.cfg.Width, c.cfg.Height, c.cfg.Width, c.cfg.Height,
+	)
 
 	cmd := exec.Command("ffmpeg",
-		"-hide_banner", "-loglevel", "error",
+		"-hide_banner", "-loglevel", "warning",
+		"-probesize", "32",
+		"-analyzeduration", "0",
+		"-fflags", "nobuffer+genpts",
+		"-flags", "low_delay",
 		"-f", "h264",
 		"-i", "pipe:0",
 		"-f", "rawvideo",
-		"-pix_fmt", "bgra",
-		"-vf", fmt.Sprintf("scale=%d:%d,setsar=1", c.cfg.Width, c.cfg.Height),
+		"-pix_fmt", "rgba",
+		"-fps_mode", "passthrough",
+		"-vf", scaleFilter,
 		"pipe:1",
 	)
 	c.ffmpeg = cmd
@@ -58,26 +77,40 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 		return err
 	}
 
+	cmd.Stderr = os.Stderr
+
 	if err := cmd.Start(); err != nil {
 		conn.Close()
 		return fmt.Errorf("ffmpeg não encontrado — instale e adicione ao PATH: %w", err)
 	}
 
 	// TCP → FFmpeg stdin
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		io.Copy(stdinPipe, conn)
 		stdinPipe.Close()
 	}()
 
-	// FFmpeg stdout → frames BGRA → callback
+	// FFmpeg stdout → frames → callback
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		buf := make([]byte, frameSize)
+		frameCount := 0
 		for {
 			if _, err := io.ReadFull(stdoutPipe, buf); err != nil {
 				if !c.stopping.Load() {
-					log.Printf("stream encerrado: %v", err)
+					log.Printf("stream encerrado após %d frames: %v", frameCount, err)
+					if c.onDone != nil {
+						c.onDone(err)
+					}
 				}
 				return
+			}
+			frameCount++
+			if frameCount == 1 {
+				log.Printf("stream iniciado (%dx%d)", c.cfg.Width, c.cfg.Height)
 			}
 			if !c.stopping.Load() {
 				frame := make([]byte, frameSize)
@@ -112,5 +145,12 @@ func (c *H264Client) Stop() {
 	}
 	if c.ffmpeg != nil && c.ffmpeg.Process != nil {
 		c.ffmpeg.Process.Kill()
+	}
+	// Aguarda as goroutines de I/O terminarem antes de retornar.
+	// Sem isso, onFrame pode ser chamado depois que o caller assumiu que
+	// o pipeline foi encerrado, causando acesso a estado já liberado.
+	c.wg.Wait()
+	if c.ffmpeg != nil {
+		c.ffmpeg.Wait() // libera recursos do processo filho
 	}
 }
