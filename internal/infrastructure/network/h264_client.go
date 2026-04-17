@@ -7,12 +7,24 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"dioupecamdesktop/internal/domain"
 )
+
+// ffmpegPath retorna o caminho para ffmpeg: primeiro tenta o diretório do exe, depois PATH.
+func ffmpegPath() string {
+	if exePath, err := os.Executable(); err == nil {
+		local := filepath.Join(filepath.Dir(exePath), "ffmpeg.exe")
+		if _, err := os.Stat(local); err == nil {
+			return local
+		}
+	}
+	return "ffmpeg"
+}
 
 // H264Client implementa domain.StreamSource.
 // Conecta via TCP (USB first, depois WiFi), decodifica H.264 via FFmpeg e
@@ -50,7 +62,7 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 		c.cfg.Width, c.cfg.Height, c.cfg.Width, c.cfg.Height,
 	)
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.Command(ffmpegPath(),
 		"-hide_banner", "-loglevel", "warning",
 		"-probesize", "32",
 		"-analyzeduration", "0",
@@ -77,7 +89,7 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 		return err
 	}
 
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.Discard
 
 	if err := cmd.Start(); err != nil {
 		conn.Close()
