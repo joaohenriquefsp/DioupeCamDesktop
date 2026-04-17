@@ -15,15 +15,35 @@ import (
 	"dioupecamdesktop/internal/domain"
 )
 
+// exeDir retorna o diretório do executável atual.
+func exeDir() string {
+	if exePath, err := os.Executable(); err == nil {
+		return filepath.Dir(exePath)
+	}
+	return "."
+}
+
 // ffmpegPath retorna o caminho para ffmpeg: primeiro tenta o diretório do exe, depois PATH.
 func ffmpegPath() string {
-	if exePath, err := os.Executable(); err == nil {
-		local := filepath.Join(filepath.Dir(exePath), "ffmpeg.exe")
-		if _, err := os.Stat(local); err == nil {
-			return local
-		}
+	local := filepath.Join(exeDir(), "ffmpeg.exe")
+	if _, err := os.Stat(local); err == nil {
+		return local
 	}
 	return "ffmpeg"
+}
+
+// adbForward tenta rodar "adb forward tcp:PORT tcp:PORT" usando o adb.exe
+// bundlado no mesmo diretório do app. Falha silenciosa — USB simplesmente não funciona.
+func adbForward(port int) {
+	adb := filepath.Join(exeDir(), "adb.exe")
+	if _, err := os.Stat(adb); err != nil {
+		return // adb não bundlado, ignora
+	}
+	portStr := fmt.Sprintf("tcp:%d", port)
+	cmd := exec.Command(adb, "forward", portStr, portStr)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	_ = cmd.Run()
 }
 
 // H264Client implementa domain.StreamSource.
@@ -137,6 +157,9 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 
 // connect tenta USB (localhost) com timeout curto, depois WiFi com timeout maior.
 func (c *H264Client) connect() (net.Conn, string, error) {
+	// Tenta configurar ADB forward automaticamente antes de tentar USB
+	adbForward(c.cfg.Port)
+
 	usbAddr := fmt.Sprintf("localhost:%d", c.cfg.Port)
 	if conn, err := net.DialTimeout("tcp", usbAddr, 500*time.Millisecond); err == nil {
 		return conn, "USB", nil

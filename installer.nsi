@@ -32,6 +32,11 @@ Section "Principal" SecMain
   ; FFmpeg (buscado pelo app no mesmo diretório)
   File "deps\ffmpeg.exe"
 
+  ; ADB — para USB automático (adb forward rodado pelo app ao conectar)
+  File "deps\adb.exe"
+  File "deps\AdbWinApi.dll"
+  File "deps\AdbWinUsbApi.dll"
+
   ; Filtro DirectShow — câmera virtual "DioupeCam"
   File "deps\DioupeCamFilter32.dll"
   File "deps\DioupeCamFilter64.dll"
@@ -80,6 +85,9 @@ Section "Uninstall"
   ; Remover arquivos
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\ffmpeg.exe"
+  Delete "$INSTDIR\adb.exe"
+  Delete "$INSTDIR\AdbWinApi.dll"
+  Delete "$INSTDIR\AdbWinUsbApi.dll"
   Delete "$INSTDIR\DioupeCamFilter32.dll"
   Delete "$INSTDIR\DioupeCamFilter64.dll"
   Delete "$INSTDIR\Uninstall.exe"
