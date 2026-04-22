@@ -2,6 +2,7 @@
 ; Empacota: DioupeCamDesktop.exe + ffmpeg.exe + DioupeCamFilter DLLs
 
 Unicode True
+!include "x64.nsh"
 
 !define APP_NAME "DioupeCam Desktop"
 !define APP_VERSION "1.0.0"
@@ -41,9 +42,15 @@ Section "Principal" SecMain
   File "deps\DioupeCamFilter32.dll"
   File "deps\DioupeCamFilter64.dll"
 
-  ; Registrar filtro
+  ; Registrar filtro 32-bit (SysWOW64\regsvr32, default com file system redirection)
   ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\DioupeCamFilter32.dll"'
-  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\DioupeCamFilter64.dll"'
+
+  ; Registrar filtro 64-bit (System32\regsvr32 real — desabilita redirecionamento FS)
+  ${If} ${RunningX64}
+    ${DisableX64FSRedirection}
+    ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\DioupeCamFilter64.dll"'
+    ${EnableX64FSRedirection}
+  ${EndIf}
 
   ; Instalar WebView2 Runtime se não estiver presente (necessário para a UI do app)
   ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
@@ -72,9 +79,15 @@ SectionEnd
 
 ;--------------------------------
 Section "Uninstall"
-  ; Desregistrar filtro
+  ; Desregistrar filtro 32-bit
   ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\DioupeCamFilter32.dll"'
-  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\DioupeCamFilter64.dll"'
+
+  ; Desregistrar filtro 64-bit
+  ${If} ${RunningX64}
+    ${DisableX64FSRedirection}
+    ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\DioupeCamFilter64.dll"'
+    ${EnableX64FSRedirection}
+  ${EndIf}
 
   ; Remover atalhos
   Delete "$SMPROGRAMS\DioupeCam\DioupeCam Desktop.lnk"

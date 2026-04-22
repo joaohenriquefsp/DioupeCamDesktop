@@ -25,6 +25,7 @@ function App() {
   const [status, setStatus] = useState('Verificando...')
   const [loading, setLoading] = useState(false)
   const [fps, setFps] = useState(0)
+  const [hasFrame, setHasFrame] = useState(false)
   const imgRef = useRef<HTMLImageElement>(null)
 
   useEffect(() => {
@@ -37,6 +38,7 @@ function App() {
     EventsOn('frame', (b64: string) => {
       if (imgRef.current && b64) {
         imgRef.current.src = 'data:image/jpeg;base64,' + b64
+        setHasFrame(true)
       }
     })
 
@@ -80,6 +82,7 @@ function App() {
     await Disconnect()
     setConnected(false)
     setFps(0)
+    setHasFrame(false)
     setStatus('Desconectado')
   }
 
@@ -187,7 +190,20 @@ function App() {
           <div className="card-preview-wrap">
             <h2 className="card-title">Preview</h2>
             {connected ? (
-              <img ref={imgRef} alt="Camera preview" className="preview-img" />
+              <>
+                <img
+                  ref={imgRef}
+                  alt="Camera preview"
+                  className="preview-img"
+                  style={{ display: hasFrame ? 'block' : 'none' }}
+                />
+                {!hasFrame && (
+                  <div className="preview-placeholder">
+                    <div className="connecting-spinner" />
+                    <p>Aguardando imagem...</p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="preview-placeholder">
                 <DotLottieReact

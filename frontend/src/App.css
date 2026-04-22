@@ -251,6 +251,19 @@ body {
 .preview-placeholder span { font-size: 28px; }
 .preview-placeholder p    { font-size: 12px; }
 
+.connecting-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #374151;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Responsivo: janela estreita (<= 640px) ──────────────── */
 @media (max-width: 640px) {
   .content {
