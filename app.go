@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,8 +46,24 @@ func NewApp() *App {
 	return &App{core: coreapp.New()}
 }
 
+func setupLogger() {
+	appData := os.Getenv("APPDATA")
+	logDir := filepath.Join(appData, "DioupeCamDesktop")
+	os.MkdirAll(logDir, 0755)
+	logPath := filepath.Join(logDir, "dioupecam.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+	log.Printf("[App] log iniciado em: %s", logPath)
+}
+
 func (a *App) Startup(ctx context.Context) {
+	setupLogger()
 	a.ctx = ctx
+	log.Printf("[App] Startup — DioupeCam Desktop")
 	a.encoder = newPreviewEncoder(func(jpg string) {
 		goruntime.EventsEmit(a.ctx, "frame", jpg)
 	})
@@ -93,6 +112,7 @@ func (a *App) Connect() error {
 	a.manualDisconnect.Store(false)
 
 	cfg := config.Load()
+	log.Printf("[App] Connect — cfg: IP=%q Port=%d Width=%d Height=%d", cfg.IP, cfg.Port, cfg.Width, cfg.Height)
 
 	if err := a.ensureCapture(cfg.Width, cfg.Height); err != nil {
 		return fmt.Errorf("Unity Capture: %w", err)
@@ -115,6 +135,7 @@ func (a *App) Connect() error {
 }
 
 func (a *App) Disconnect() {
+	log.Printf("[App] Disconnect")
 	a.manualDisconnect.Store(true)
 	a.stopFpsGoroutine()
 	a.core.Stop()

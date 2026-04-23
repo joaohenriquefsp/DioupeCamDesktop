@@ -1,6 +1,8 @@
 package network
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -8,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,13 +40,16 @@ func ffmpegPath() string {
 func adbForward(port int) {
 	adb := filepath.Join(exeDir(), "adb.exe")
 	if _, err := os.Stat(adb); err != nil {
-		return // adb não bundlado, ignora
+		log.Printf("[ADB] adb.exe não encontrado em %s — USB não disponível", adb)
+		return
 	}
 	portStr := fmt.Sprintf("tcp:%d", port)
 	cmd := exec.Command(adb, "forward", portStr, portStr)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	_ = cmd.Run()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	log.Printf("[ADB] forward %s %s: err=%v output=%q", portStr, portStr, err, strings.TrimSpace(out.String()))
 }
 
 // H264Client implementa domain.StreamSource.
@@ -67,23 +73,20 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 	if err != nil {
 		return fmt.Errorf("sem conexão com DioupeCam (tentou USB e WiFi): %w", err)
 	}
-	log.Printf("conectado via %s", mode)
+	log.Printf("[H264] conectado via %s — addr remoto: %s", mode, conn.RemoteAddr())
 	c.conn = conn
 
 	frameSize := c.cfg.Width * c.cfg.Height * 4
+	log.Printf("[H264] frameSize=%d bytes (%dx%d RGBA)", frameSize, c.cfg.Width, c.cfg.Height)
 
-	// scale com preservação de aspect ratio + padding preto para preencher a resolução alvo.
-	// Evita esticamento horizontal quando câmera e config têm proporções diferentes (ex: 4:3 vs 16:9).
-	// crop=in_w:in_h-1:0:0 remove a última linha antes do scale:
-	// alguns encoders MediaCodec de hardware Android deixam a última linha
-	// com chroma não inicializado (aparece verde após decode YUV→RGBA).
 	scaleFilter := fmt.Sprintf(
 		"crop=in_w:in_h-1:0:0,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1",
 		c.cfg.Width, c.cfg.Height, c.cfg.Width, c.cfg.Height,
 	)
 
-	cmd := exec.Command(ffmpegPath(),
-		"-hide_banner", "-loglevel", "warning",
+	ffmpegBin := ffmpegPath()
+	args := []string{
+		"-hide_banner", "-loglevel", "verbose",
 		"-probesize", "32",
 		"-analyzeduration", "0",
 		"-fflags", "nobuffer+genpts",
@@ -95,32 +98,52 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 		"-fps_mode", "passthrough",
 		"-vf", scaleFilter,
 		"pipe:1",
-	)
+	}
+	log.Printf("[H264] FFmpeg bin: %s", ffmpegBin)
+	log.Printf("[H264] FFmpeg args: %s", strings.Join(args, " "))
+
+	cmd := exec.Command(ffmpegBin, args...)
 	c.ffmpeg = cmd
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		conn.Close()
-		return err
+		return fmt.Errorf("StdinPipe: %w", err)
 	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		conn.Close()
-		return err
+		return fmt.Errorf("StdoutPipe: %w", err)
 	}
-
-	cmd.Stderr = io.Discard
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("StderrPipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		conn.Close()
-		return fmt.Errorf("ffmpeg não encontrado — instale e adicione ao PATH: %w", err)
+		return fmt.Errorf("FFmpeg não iniciou (%s): %w", ffmpegBin, err)
 	}
+	log.Printf("[H264] FFmpeg iniciado — PID %d", cmd.Process.Pid)
+
+	// Log FFmpeg stderr linha a linha
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			log.Printf("[FFmpeg] %s", scanner.Text())
+		}
+		log.Printf("[FFmpeg] stderr encerrado")
+	}()
 
 	// TCP → FFmpeg stdin
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		io.Copy(stdinPipe, conn)
+		n, err := io.Copy(stdinPipe, conn)
+		log.Printf("[H264] TCP→FFmpeg stdin encerrado: %d bytes copiados, err=%v", n, err)
 		stdinPipe.Close()
 	}()
 
@@ -133,7 +156,7 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 		for {
 			if _, err := io.ReadFull(stdoutPipe, buf); err != nil {
 				if !c.stopping.Load() {
-					log.Printf("stream encerrado após %d frames: %v", frameCount, err)
+					log.Printf("[H264] ReadFull encerrado após %d frames: %v", frameCount, err)
 					if c.onDone != nil {
 						c.onDone(err)
 					}
@@ -142,7 +165,9 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 			}
 			frameCount++
 			if frameCount == 1 {
-				log.Printf("stream iniciado (%dx%d)", c.cfg.Width, c.cfg.Height)
+				log.Printf("[H264] PRIMEIRO frame recebido! resolução=%dx%d", c.cfg.Width, c.cfg.Height)
+			} else if frameCount%150 == 0 {
+				log.Printf("[H264] frame #%d", frameCount)
 			}
 			if !c.stopping.Load() {
 				frame := make([]byte, frameSize)
@@ -157,19 +182,26 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 
 // connect tenta USB (localhost) com timeout curto, depois WiFi com timeout maior.
 func (c *H264Client) connect() (net.Conn, string, error) {
-	// Tenta configurar ADB forward automaticamente antes de tentar USB
+	log.Printf("[H264] iniciando conexão — porta %d, IP WiFi: %q", c.cfg.Port, c.cfg.IP)
 	adbForward(c.cfg.Port)
 
 	usbAddr := fmt.Sprintf("localhost:%d", c.cfg.Port)
+	log.Printf("[H264] tentando USB: %s (timeout 500ms)", usbAddr)
 	if conn, err := net.DialTimeout("tcp", usbAddr, 500*time.Millisecond); err == nil {
+		log.Printf("[H264] USB OK: %s", usbAddr)
 		return conn, "USB", nil
+	} else {
+		log.Printf("[H264] USB falhou: %v", err)
 	}
 
 	wifiAddr := fmt.Sprintf("%s:%d", c.cfg.IP, c.cfg.Port)
+	log.Printf("[H264] tentando WiFi: %s (timeout 2s)", wifiAddr)
 	conn, err := net.DialTimeout("tcp", wifiAddr, 2*time.Second)
 	if err != nil {
+		log.Printf("[H264] WiFi falhou: %v", err)
 		return nil, "", err
 	}
+	log.Printf("[H264] WiFi OK: %s", wifiAddr)
 	return conn, "WiFi", nil
 }
 

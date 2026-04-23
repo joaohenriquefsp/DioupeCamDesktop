@@ -67,6 +67,7 @@ function App() {
     setLoading(true)
     setStatus('Conectando...')
     try {
+      await SaveConfig(config)
       await Connect()
       setConnected(true)
       setStatus('Conectado')
