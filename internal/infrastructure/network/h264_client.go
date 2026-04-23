@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"dioupecamdesktop/internal/domain"
@@ -45,6 +46,7 @@ func adbForward(port int) {
 	}
 	portStr := fmt.Sprintf("tcp:%d", port)
 	cmd := exec.Command(adb, "forward", portStr, portStr)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -103,6 +105,11 @@ func (c *H264Client) Start(onFrame func([]byte)) error {
 	log.Printf("[H264] FFmpeg args: %s", strings.Join(args, " "))
 
 	cmd := exec.Command(ffmpegBin, args...)
+	// CREATE_NO_WINDOW: impede que o Windows aloque um novo console para o
+	// processo filho (ffmpeg.exe é subsistema console). Sem essa flag, num app
+	// GUI (windowsgui) o filho recebe handles de console em vez dos nossos pipes,
+	// quebrando stdin/stdout e fazendo o preview nunca receber frames.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	c.ffmpeg = cmd
 
 	stdinPipe, err := cmd.StdinPipe()
